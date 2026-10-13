@@ -1,91 +1,88 @@
 import os
 import requests
-import xml.etree.ElementTree as ET
 from flask import Flask, request
 from dotenv import load_dotenv
 
-# .env file theke variables load kora hocche
 load_dotenv()
 
 app = Flask(__name__)
 
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
+# আপনার CricAPI Key এখানে .env থেকে লোড করতে পারেন অথবা সরাসরি বসাতে পারেন
+CRIC_API_KEY = os.getenv("CRIC_API_KEY", "c0809dcb-7afd-41f0-9c04-1c3083f7bb69") # YOUR_API_KEY_HERE এর জায়গায় আপনার আসল কী বসান
 
 def get_live_score(user_msg):
-    """
-    ESPNcricinfo RSS feed theke live score parse korar function.
-    User er keyword onujayi match filter kora hobe.
-    """
-    url = "http://static.cricinfo.com/rss/livescores.xml"
+    url = f"https://api.cricapi.com/v1/currentMatches?apikey={CRIC_API_KEY}&offset=0"
     
     try:
         response = requests.get(url, timeout=10)
         if response.status_code != 200:
-            return "Score ekhon pawa jacche na, 2 min por try korun"
+            return "এ মুহূর্তে সার্ভার থেকে ডেটা পাওয়া যাচ্ছে না। কিছুক্ষণ পর চেষ্টা করুন।"
             
-        root = ET.fromstring(response.content)
-        items = root.findall(".//item")
+        data = response.json()
+        matches = data.get("data", [])
         
-        if not items:
-            return "Ekhon kono live match cholche na."
+        if not matches:
+            return "এ মুহূর্তে কোনো লাইভ ম্যাচ চলছে না।"
             
         msg_lower = user_msg.lower()
-        # General query naki specific team er query sheta check korchi
         is_general_query = msg_lower in ["score", "live", "cricbuzz"]
         
-        reply = "🏏 Live Cricket Updates:\n\n"
+        reply = "🏏 লাইভ ক্রিকেট আপডেট:\n\n"
         match_found = 0
         
-        for item in items:
-            title = item.find("title").text
+        for match in matches:
+            name = match.get('name', '')
+            status = match.get('status', '')
             
-            # Specific match khujle (e.g., "BAN vs AFG")
+            # স্পেসিফিক ম্যাচ ফিল্টার (যেমন "BAN", "SA")
             if not is_general_query:
-                # "ban vs afg" theke "vs" bad diye ["ban", "afg"] word gulo ber korchi
                 search_keywords = msg_lower.replace("vs", " ").split()
-                # Title er bhetor jodi keyword match kore
-                if any(word in title.lower() for word in search_keywords):
-                    reply += f"🔹 {title}\n\n"
-                    match_found += 1
+                if not any(word in name.lower() for word in search_keywords):
+                    continue
+            
+            reply += f"🔹 {name}\n"
+            reply += f"📌 {status}\n"
+            
+            scores = match.get("score", [])
+            if scores:
+                for sc in scores:
+                    team = sc.get('inning', '').replace('Inning', 'Inn')
+                    runs = sc.get('r', 0)
+                    wkts = sc.get('w', 0)
+                    overs = sc.get('o', 0)
+                    reply += f"   - {team}: {runs}/{wkts} ({overs} ov)\n"
             else:
-                # General "score" likhle top 3-4 ta match dekhabo
-                reply += f"🔹 {title}\n\n"
-                match_found += 1
+                reply += "   - স্কোর এখনো আপডেট হয়নি।\n"
+            
+            reply += "\n"
+            match_found += 1
+            
+            if is_general_query and match_found >= 3:
+                break
                 
-                if match_found >= 4:
-                    break
-        
-        # Jodi user er kankhito match na pawa jay, tobe top 3 ta default hishebe dekhabo
         if match_found == 0:
-            reply = "Apnar kankhito match ti paoa jayni. Top live match gulo holo:\n\n"
-            for item in items[:3]:
-                reply += f"🔹 {item.find('title').text}\n\n"
-                
+            return "আপনার কাঙ্ক্ষিত ম্যাচটি পাওয়া যায়নি। দয়া করে 'score' লিখে বর্তমান ম্যাচগুলোর তালিকা দেখুন।"
+            
         return reply.strip()
 
     except Exception as e:
-        print(f"XML Parsing/Request Error: {e}")
-        return "Score ekhon pawa jacche na, 2 min por try korun"
+        print(f"API Error: {e}")
+        return "স্কোর আনতে সমস্যা হচ্ছে, ২ মিনিট পর আবার চেষ্টা করুন।"
 
 def send_message(recipient_id, message_text):
-    """
-    Meta Graph API v19.0 diye message send korar function.
-    """
     url = f"https://graph.facebook.com/v19.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     headers = {"Content-Type": "application/json"}
     payload = {
         "recipient": {"id": recipient_id},
         "message": {"text": message_text}
     }
-    
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code != 200:
-        print(f"Failed to send message: {response.text}")
+    requests.post(url, headers=headers, json=payload)
 
 @app.route("/", methods=["GET"])
 def index():
-    return "Cricket Bot is running smoothly!", 200
+    return "Cricket Bot is running!", 200
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
@@ -93,17 +90,13 @@ def verify_webhook():
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
-    if mode and token:
-        if mode == "subscribe" and token == VERIFY_TOKEN:
-            return challenge, 200
-        else:
-            return "Verification token mismatch", 403
-    return "Webhook is ready", 200
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return challenge, 200
+    return "Verification token mismatch", 403
 
 @app.route("/webhook", methods=["POST"])
 def webhook_events():
     data = request.get_json()
-    
     if data and data.get("object") == "page":
         for entry in data.get("entry", []):
             for messaging_event in entry.get("messaging", []):
@@ -111,18 +104,13 @@ def webhook_events():
                     sender_id = messaging_event["sender"]["id"]
                     message_text = messaging_event["message"]["text"].strip()
                     
-                    # Keywords check
                     keywords = ["score", "live", "cricbuzz", "ban", "afg", "sa", "aus", "vs"]
-                    
                     if any(keyword in message_text.lower() for keyword in keywords):
-                        # Message pass kore dicchi jate filter korte pare
                         live_score_reply = get_live_score(message_text)
                         send_message(sender_id, live_score_reply)
                     else:
-                        send_message(sender_id, "Live score jante 'score', 'live' ba team er nam likhe message korun.")
-                        
+                        send_message(sender_id, "লাইভ স্কোর জানতে 'score', 'live' বা টিমের নাম লিখে মেসেজ করুন।")
         return "EVENT_RECEIVED", 200
-    
     return "Not Found", 404
 
 if __name__ == "__main__":
