@@ -9,6 +9,7 @@ app = Flask(__name__)
 
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
+# নিচে "YOUR_RAPIDAPI_KEY" এর জায়গায় আপনার RapidAPI থেকে পাওয়া আসল Key টি বসিয়ে দিন
 RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "84979f4188mshaf1d97ff6398457p1d4d3djsn974c4fcce480") 
 
 def get_detailed_live_score(user_msg):
@@ -126,7 +127,6 @@ def get_detailed_live_score(user_msg):
             
             reply = f"🏏 {target_match_name}\n📌 Status: {match_status}\n\n"
             
-            # দলের লাইভ স্কোর ও ওভার (যেমন: 215/4 (45.2 ov))
             bat_team = miniscore.get("batTeam") or {}
             if bat_team:
                 score = bat_team.get("teamScore")
@@ -135,7 +135,6 @@ def get_detailed_live_score(user_msg):
                 if score:
                     reply += f"📊 Score: {score}/{wkts} ({ovs} ov)\n\n"
             
-            # API এর আসল কি (Key) ব্যবহার করে ব্যাটারদের তথ্য আনা হচ্ছে
             striker = miniscore.get("batsmanStriker") or miniscore.get("striker") or {}
             non_striker = miniscore.get("batsmanNonStriker") or miniscore.get("nonStriker") or {}
             
@@ -146,7 +145,6 @@ def get_detailed_live_score(user_msg):
                 if non_striker:
                     reply += f"   {non_striker.get('batName')}: {non_striker.get('batRuns')} ({non_striker.get('batBalls')})\n\n"
                 
-            # বোলারদের তথ্য
             bowler = miniscore.get("bowlerStriker") or miniscore.get("bowler") or {}
             if bowler:
                 reply += "⚾ Bowling:\n"
@@ -165,3 +163,56 @@ def get_detailed_live_score(user_msg):
     except Exception as e:
         print(f"API Error: {e}")
         return "সার্ভারে সমস্যা, একটু পর চেষ্টা করুন।"
+
+def send_message(recipient_id, message_text):
+    url = f"https://graph.facebook.com/v19.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "recipient": {"id": recipient_id},
+        "message": {"text": message_text}
+    }
+    requests.post(url, headers=headers, json=payload)
+
+@app.route("/", methods=["GET"])
+def index():
+    return "Cricket Bot is running perfectly with RapidAPI!", 200
+
+@app.route("/webhook", methods=["GET"])
+def verify_webhook():
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+
+    if mode and token:
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            return challenge, 200
+        else:
+            return "Verification token mismatch", 403
+    return "Webhook is ready", 200
+
+@app.route("/webhook", methods=["POST"])
+def webhook_events():
+    data = request.get_json()
+    
+    if data and data.get("object") == "page":
+        for entry in data.get("entry", []):
+            for messaging_event in entry.get("messaging", []):
+                if messaging_event.get("message") and messaging_event["message"].get("text"):
+                    sender_id = messaging_event["sender"]["id"]
+                    message_text = messaging_event["message"]["text"].strip()
+                    
+                    keywords = ["score", "live", "cricbuzz", "cricket", "ban", "afg", "bd", "sa", "aus", "ind", "eng", "pak", "nz", "vs"]
+                    
+                    if any(keyword in message_text.lower() for keyword in keywords):
+                        live_score_reply = get_detailed_live_score(message_text)
+                        send_message(sender_id, live_score_reply)
+                    else:
+                        send_message(sender_id, "Live score জানতে 'score' অথবা নির্দিষ্ট দলের নাম (যেমন: bd, ind) লিখে মেসেজ করুন।")
+                        
+        return "EVENT_RECEIVED", 200
+    
+    return "Not Found", 404
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
