@@ -9,8 +9,37 @@ app = Flask(__name__)
 
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
-# নিচে "YOUR_RAPIDAPI_KEY" এর জায়গায় আপনার RapidAPI থেকে পাওয়া আসল Key টি বসিয়ে দিন
 RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "84979f4188mshaf1d97ff6398457p1d4d3djsn974c4fcce480") 
+
+# স্কোর সুন্দরভাবে সাজানোর জন্য হেল্পার ফাংশন
+def get_score_str(match_score, team1_name, team2_name):
+    if not match_score:
+        return ""
+    
+    def format_innings(inngs):
+        if not inngs: return ""
+        r = inngs.get('runs', 0)
+        w = inngs.get('wickets', 0)
+        o = inngs.get('overs', 0)
+        decl = "d" if inngs.get('isDeclared') else ""
+        return f"{r}/{w}{decl} ({o} ov)"
+
+    t1_score = match_score.get("team1Score", {})
+    t2_score = match_score.get("team2Score", {})
+    
+    t1_i1 = format_innings(t1_score.get("inngs1"))
+    t1_i2 = format_innings(t1_score.get("inngs2"))
+    t2_i1 = format_innings(t2_score.get("inngs1"))
+    t2_i2 = format_innings(t2_score.get("inngs2"))
+    
+    t1_final = t1_i1 + (f" & {t1_i2}" if t1_i2 else "")
+    t2_final = t2_i1 + (f" & {t2_i2}" if t2_i2 else "")
+    
+    res = ""
+    if t1_final: res += f"🏏 {team1_name}: {t1_final}\n"
+    if t2_final: res += f"🏏 {team2_name}: {t2_final}\n"
+    
+    return res
 
 def get_detailed_live_score(user_msg):
     headers = {
@@ -46,39 +75,38 @@ def get_detailed_live_score(user_msg):
             return "এই মুহূর্তে কোনো লাইভ ম্যাচ চলছে না।"
 
         if is_general_query:
-            reply = "🏏 Live Cricket Matches:\n\n"
+            reply = "🏆 Live Cricket Updates:\n\n"
             count = 0
             for m in all_matches:
                 info = m.get("matchInfo", {})
-                team1 = info.get("team1", {}).get("teamName", "")
-                team2 = info.get("team2", {}).get("teamName", "")
+                team1 = info.get("team1", {}).get("teamSName", "")
+                team2 = info.get("team2", {}).get("teamSName", "")
                 status = info.get("status", "")
                 
                 reply += f"🔹 {team1} vs {team2}\n"
+                
+                # মূল স্কোর বসানো হচ্ছে
+                score_str = get_score_str(m.get("matchScore"), team1, team2)
+                if score_str:
+                    reply += score_str
+                    
                 reply += f"📌 {status}\n\n"
                 
                 count += 1
                 if count >= 3:
                     break
             
-            reply += "ব্যাটসম্যান ও বোলারের ডিটেইলস জানতে টিমের নাম (যেমন: ban) লিখে মেসেজ করুন।"
+            reply += "বিস্তারিত জানতে টিমের নাম (যেমন: ban) লিখে মেসেজ করুন।"
             return reply.strip()
         
         else:
             search_terms = msg_lower.replace("vs", " ").split()
-            
             aliases = {
-                "bd": ["ban", "bangladesh"],
-                "ban": ["bd", "bangladesh"],
-                "ind": ["india"],
-                "pak": ["pakistan"],
-                "sa": ["rsa", "south africa"],
-                "rsa": ["sa", "south africa"],
-                "nz": ["new zealand"],
-                "eng": ["england"],
-                "aus": ["australia"],
-                "afg": ["afghanistan"],
-                "sl": ["sri lanka", "sri"]
+                "bd": ["ban", "bangladesh"], "ban": ["bd", "bangladesh"],
+                "ind": ["india"], "pak": ["pakistan"],
+                "sa": ["rsa", "south africa"], "rsa": ["sa", "south africa"],
+                "nz": ["new zealand"], "eng": ["england"],
+                "aus": ["australia"], "afg": ["afghanistan"], "sl": ["sri lanka", "sri"]
             }
             
             expanded_terms = set(search_terms)
@@ -89,6 +117,9 @@ def get_detailed_live_score(user_msg):
             target_match_id = None
             target_match_name = ""
             target_match_status = ""
+            target_match_score = {}
+            t1_sname = ""
+            t2_sname = ""
             
             for m in all_matches:
                 info = m.get("matchInfo", {})
@@ -107,6 +138,9 @@ def get_detailed_live_score(user_msg):
                     target_match_id = info.get("matchId")
                     target_match_name = f"{info.get('team1', {}).get('teamName')} vs {info.get('team2', {}).get('teamName')}"
                     target_match_status = info.get("status", "")
+                    target_match_score = m.get("matchScore", {})
+                    t1_sname = info.get("team1", {}).get("teamSName", "")
+                    t2_sname = info.get("team2", {}).get("teamSName", "")
                     
                     if info.get("state") == "In Progress":
                         break
@@ -114,49 +148,49 @@ def get_detailed_live_score(user_msg):
             if not target_match_id:
                 return "আপনার কাঙ্ক্ষিত ম্যাচটি এখন চলছে না বা লিস্টে নেই।"
 
+            reply = f"🏆 {target_match_name}\n\n"
+            
+            # ১০০% গ্যারান্টিড মেইন স্কোর
+            main_score_str = get_score_str(target_match_score, t1_sname, t2_sname)
+            if main_score_str:
+                reply += main_score_str
+                reply += "\n"
+
+            # লাইভ স্কোরের বিস্তারিত আনার চেষ্টা
             url_live_score = f"https://cricbuzz-cricket.p.rapidapi.com/mcenter/v1/{target_match_id}/livescore"
             score_resp = requests.get(url_live_score, headers=headers, timeout=10)
             
-            if score_resp.status_code != 200:
-                return f"🏏 {target_match_name}\n📌 {target_match_status}\n\n(বিস্তারিত ডেটা এখন পাওয়া যাচ্ছে না)"
+            if score_resp.status_code == 200:
+                score_data = score_resp.json()
+                miniscore = score_data.get("miniscore") or {}
                 
-            score_data = score_resp.json()
-            miniscore = score_data.get("miniscore") or {}
-            
-            match_status = miniscore.get("matchScoreDetails", {}).get("customStatus") or target_match_status
-            
-            reply = f"🏏 {target_match_name}\n📌 Status: {match_status}\n\n"
-            
-            bat_team = miniscore.get("batTeam") or {}
-            if bat_team:
-                score = bat_team.get("teamScore")
-                wkts = bat_team.get("teamWkts")
-                ovs = bat_team.get("teamOvs")
-                if score:
-                    reply += f"📊 Score: {score}/{wkts} ({ovs} ov)\n\n"
-            
-            striker = miniscore.get("batsmanStriker") or miniscore.get("striker") or {}
-            non_striker = miniscore.get("batsmanNonStriker") or miniscore.get("nonStriker") or {}
-            
-            if striker or non_striker:
-                reply += "🏏 Batting:\n"
-                if striker:
-                    reply += f"👉 {striker.get('batName')}*: {striker.get('batRuns')} ({striker.get('batBalls')})\n"
-                if non_striker:
-                    reply += f"   {non_striker.get('batName')}: {non_striker.get('batRuns')} ({non_striker.get('batBalls')})\n\n"
+                match_status = miniscore.get("matchScoreDetails", {}).get("customStatus") or target_match_status
+                reply += f"📌 Status: {match_status}\n\n"
                 
-            bowler = miniscore.get("bowlerStriker") or miniscore.get("bowler") or {}
-            if bowler:
-                reply += "⚾ Bowling:\n"
-                reply += f"👉 {bowler.get('bowlName')}: {bowler.get('bowlWkts')}/{bowler.get('bowlRuns')} ({bowler.get('bowlOvs')} ov)\n"
+                striker = miniscore.get("batsmanStriker") or miniscore.get("striker") or {}
+                non_striker = miniscore.get("batsmanNonStriker") or miniscore.get("nonStriker") or {}
                 
-            partnership = miniscore.get('partnerShip')
-            if partnership:
-                reply += f"\n🤝 Partnership: {partnership}"
-                
-            recent = miniscore.get("recentOvsStats")
-            if recent:
-                reply += f"\n📉 Recent: {recent}"
+                if striker or non_striker:
+                    reply += "🏏 Batting:\n"
+                    if striker:
+                        reply += f"👉 {striker.get('batName')}*: {striker.get('batRuns')} ({striker.get('batBalls')})\n"
+                    if non_striker:
+                        reply += f"   {non_striker.get('batName')}: {non_striker.get('batRuns')} ({non_striker.get('batBalls')})\n\n"
+                    
+                bowler = miniscore.get("bowlerStriker") or miniscore.get("bowler") or {}
+                if bowler:
+                    reply += "⚾ Bowling:\n"
+                    reply += f"👉 {bowler.get('bowlName')}: {bowler.get('bowlWkts')}/{bowler.get('bowlRuns')} ({bowler.get('bowlOvs')} ov)\n\n"
+                    
+                partnership = miniscore.get('partnerShip')
+                if partnership:
+                    reply += f"🤝 Partnership: {partnership}\n"
+                    
+                recent = miniscore.get("recentOvsStats")
+                if recent:
+                    reply += f"📉 Recent: {recent}"
+            else:
+                reply += f"📌 Status: {target_match_status}"
                 
             return reply.strip()
 
@@ -193,7 +227,6 @@ def verify_webhook():
 @app.route("/webhook", methods=["POST"])
 def webhook_events():
     data = request.get_json()
-    
     if data and data.get("object") == "page":
         for entry in data.get("entry", []):
             for messaging_event in entry.get("messaging", []):
@@ -210,7 +243,6 @@ def webhook_events():
                         send_message(sender_id, "Live score জানতে 'score' অথবা নির্দিষ্ট দলের নাম (যেমন: bd, ind) লিখে মেসেজ করুন।")
                         
         return "EVENT_RECEIVED", 200
-    
     return "Not Found", 404
 
 if __name__ == "__main__":
