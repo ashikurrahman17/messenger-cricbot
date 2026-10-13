@@ -9,10 +9,12 @@ app = Flask(__name__)
 
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "84979f4188mshaf1d97ff6398457p1d4d3djsn974c4fcce480") 
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "84979f4188mshaf1d97ff6398457p1d4d3djsn974c4fcce480")  # Default key if not set in .env
 
 def get_score_str(match_score, team1_name, team2_name):
-    if not match_score: return ""
+    if not match_score: 
+        return ""
+    
     def format_innings(inngs):
         if not inngs: return ""
         r = inngs.get('runs', 0)
@@ -21,8 +23,8 @@ def get_score_str(match_score, team1_name, team2_name):
         decl = "d" if inngs.get('isDeclared') else ""
         return f"{r}/{w}{decl} ({o} ov)"
 
-    t1_score = match_score.get("team1Score", {})
-    t2_score = match_score.get("team2Score", {})
+    t1_score = match_score.get("team1Score") or {}
+    t2_score = match_score.get("team2Score") or {}
     
     t1_i1 = format_innings(t1_score.get("inngs1"))
     t1_i2 = format_innings(t1_score.get("inngs2"))
@@ -37,6 +39,62 @@ def get_score_str(match_score, team1_name, team2_name):
     if t2_final: res += f"🏏 {team2_name}: {t2_final}\n"
     return res
 
+# লাইভ স্কোর বের করার বুলেটপ্রুফ ফাংশন
+def extract_live_details(score_data, target_match_status=""):
+    miniscore = score_data.get("miniscore") or score_data.get("miniScore") or {}
+    header = score_data.get("matchHeader") or score_data.get("matchheader") or {}
+    
+    match_details = miniscore.get("matchScoreDetails") or miniscore.get("matchscoredetails") or {}
+    match_status = match_details.get("customStatus") or match_details.get("customstatus") or header.get("status") or target_match_status
+    
+    reply = f"📌 Status: {match_status}\n\n"
+    
+    bat_team = miniscore.get("batTeam") or miniscore.get("batteam") or {}
+    if bat_team:
+        score = bat_team.get("teamScore") or bat_team.get("score")
+        wkts = bat_team.get("teamWkts") or bat_team.get("wickets")
+        ovs = bat_team.get("teamOvs") or bat_team.get("overs")
+        if score is not None:
+            reply += f"📊 Live Score: {score}/{wkts} ({ovs} ov)\n\n"
+    
+    # ব্যাটারদের তথ্য (বড় হাতের বা ছোট হাতের যাই হোক না কেন)
+    striker = miniscore.get("batsmanStriker") or miniscore.get("batsmanstriker") or miniscore.get("striker") or {}
+    non_striker = miniscore.get("batsmanNonStriker") or miniscore.get("batsmannonstriker") or miniscore.get("nonStriker") or {}
+    
+    if striker or non_striker:
+        reply += "🏏 Batting:\n"
+        if striker:
+            s_name = striker.get("batName") or striker.get("batname") or striker.get("name") or "Batsman 1"
+            s_runs = striker.get("batRuns") or striker.get("runs") or "0"
+            s_balls = striker.get("batBalls") or striker.get("balls") or "0"
+            reply += f"👉 {s_name}*: {s_runs} ({s_balls})\n"
+        if non_striker:
+            ns_name = non_striker.get("batName") or non_striker.get("batname") or non_striker.get("name") or "Batsman 2"
+            ns_runs = non_striker.get("batRuns") or non_striker.get("runs") or "0"
+            ns_balls = non_striker.get("batBalls") or non_striker.get("balls") or "0"
+            reply += f"   {ns_name}: {ns_runs} ({ns_balls})\n"
+        reply += "\n"
+        
+    # বোলারের তথ্য
+    bowler = miniscore.get("bowlerStriker") or miniscore.get("bowlerstriker") or miniscore.get("bowler") or {}
+    if bowler:
+        b_name = bowler.get("bowlName") or bowler.get("bowlname") or bowler.get("name") or "Bowler"
+        b_wkts = bowler.get("bowlWkts") or bowler.get("wickets") or bowler.get("wkts") or "0"
+        b_runs = bowler.get("bowlRuns") or bowler.get("runs") or "0"
+        b_ovs = bowler.get("bowlOvs") or bowler.get("overs") or "0"
+        reply += "⚾ Bowling:\n"
+        reply += f"👉 {b_name}: {b_wkts}/{b_runs} ({b_ovs} ov)\n\n"
+        
+    partnership = miniscore.get("partnerShip") or miniscore.get("partnership")
+    if partnership:
+        reply += f"🤝 Partnership: {partnership}\n"
+        
+    recent = miniscore.get("recentOvsStats") or miniscore.get("recentovsstats")
+    if recent:
+        reply += f"📉 Recent: {recent}"
+        
+    return reply.strip()
+
 def handle_cricket_query(user_msg):
     msg_lower = user_msg.lower().strip()
     headers = {
@@ -44,7 +102,7 @@ def handle_cricket_query(user_msg):
         "x-rapidapi-host": "cricbuzz-cricket.p.rapidapi.com"
     }
     
-    # === STEP 2: Jodi User sothik Match ID (number) diye search kore ===
+    # === STEP 2: Match ID দিয়ে সার্চ ===
     if msg_lower.isdigit():
         match_id = msg_lower
         url_live_score = f"https://cricbuzz-cricket.p.rapidapi.com/mcenter/v1/{match_id}/livescore"
@@ -55,68 +113,34 @@ def handle_cricket_query(user_msg):
                 return "এই আইডির কোনো ম্যাচ বা ডেটা পাওয়া যায়নি।"
                 
             score_data = score_resp.json()
-            miniscore = score_data.get("miniscore") or {}
+            header = score_data.get("matchHeader") or score_data.get("matchheader") or {}
             
-            # Match er nam ber kora
-            header = score_data.get("matchHeader", {})
             t1_name = header.get("team1", {}).get("name", "Team 1")
             t2_name = header.get("team2", {}).get("name", "Team 2")
-            match_status = miniscore.get("matchScoreDetails", {}).get("customStatus") or header.get("status", "")
             
-            reply = f"🏆 {t1_name} vs {t2_name}\n📌 Status: {match_status}\n\n"
+            reply = f"🏆 {t1_name} vs {t2_name}\n"
+            reply += extract_live_details(score_data)
+            return reply
             
-            # Main Score
-            bat_team = miniscore.get("batTeam") or {}
-            if bat_team:
-                score = bat_team.get("teamScore")
-                wkts = bat_team.get("teamWkts")
-                ovs = bat_team.get("teamOvs")
-                if score:
-                    reply += f"📊 Live Score: {score}/{wkts} ({ovs} ov)\n\n"
-            
-            # Batsman details
-            striker = miniscore.get("batsmanStriker") or miniscore.get("striker") or {}
-            non_striker = miniscore.get("batsmanNonStriker") or miniscore.get("nonStriker") or {}
-            if striker or non_striker:
-                reply += "🏏 Batting:\n"
-                if striker:
-                    reply += f"👉 {striker.get('batName')}*: {striker.get('batRuns')} ({striker.get('batBalls')})\n"
-                if non_striker:
-                    reply += f"   {non_striker.get('batName')}: {non_striker.get('batRuns')} ({non_striker.get('batBalls')})\n\n"
-                
-            # Bowler details
-            bowler = miniscore.get("bowlerStriker") or miniscore.get("bowler") or {}
-            if bowler:
-                reply += "⚾ Bowling:\n"
-                reply += f"👉 {bowler.get('bowlName')}: {bowler.get('bowlWkts')}/{bowler.get('bowlRuns')} ({bowler.get('bowlOvs')} ov)\n\n"
-                
-            partnership = miniscore.get('partnerShip')
-            if partnership:
-                reply += f"🤝 Partnership: {partnership}\n"
-                
-            recent = miniscore.get("recentOvsStats")
-            if recent:
-                reply += f"📉 Recent: {recent}"
-                
-            return reply.strip()
         except Exception as e:
-            print(f"API Error: {e}")
+            print(f"ID API Error: {e}")
             return "ডেটা আনতে সমস্যা হচ্ছে। আইডিটি সঠিক কিনা চেক করুন।"
 
-    # === STEP 1: Jodi User 'score' ba 'team name' lekhe ===
+    # === STEP 1: General Query ('score' বা team name) ===
     url_live_matches = "https://cricbuzz-cricket.p.rapidapi.com/matches/v1/live"
     try:
         response = requests.get(url_live_matches, headers=headers, timeout=10)
         if response.status_code != 200:
             return "এ মুহূর্তে স্কোর পাওয়া যাচ্ছে না।"
             
-        matches_list = response.json().get("typeMatches", [])
-        
+        matches_list = response.json().get("typeMatches") or []
         all_matches = []
+        
         for t in matches_list:
             if t.get("matchType") in ["International", "League", "Women", "Domestic"]:
-                for series in t.get("seriesMatches", []):
-                    for m in series.get("seriesAdWrapper", {}).get("matches", []) or series.get("matches", []):
+                for series in t.get("seriesMatches") or []:
+                    wrapper_matches = series.get("seriesAdWrapper", {}).get("matches") or series.get("matches") or []
+                    for m in wrapper_matches:
                         if "matchInfo" in m:
                             all_matches.append(m)
 
@@ -128,7 +152,7 @@ def handle_cricket_query(user_msg):
         count = 0
         
         for m in all_matches:
-            info = m.get("matchInfo", {})
+            info = m.get("matchInfo") or {}
             t1_n = info.get("team1", {}).get("teamName", "")
             t2_n = info.get("team2", {}).get("teamName", "")
             t1_s = info.get("team1", {}).get("teamSName", "")
@@ -136,7 +160,6 @@ def handle_cricket_query(user_msg):
             status = info.get("status", "")
             match_id = info.get("matchId")
             
-            # User jodi specific team lekhe (e.g., 'ban'), tobe filter korbe
             if not is_general_query:
                 aliases = {"bd": ["ban", "bangladesh"], "ban": ["bd", "bangladesh"], "ind": ["india"], "sa": ["rsa", "south africa"]}
                 search_terms = msg_lower.replace("vs", " ").split()
@@ -165,7 +188,7 @@ def handle_cricket_query(user_msg):
         return reply.strip()
 
     except Exception as e:
-        print(f"API Error: {e}")
+        print(f"List API Error: {e}")
         return "সার্ভারে সমস্যা, একটু পর চেষ্টা করুন।"
 
 def send_message(recipient_id, message_text):
@@ -179,7 +202,7 @@ def send_message(recipient_id, message_text):
 
 @app.route("/", methods=["GET"])
 def index():
-    return "Cricket Bot is running smoothly with ID Logic!", 200
+    return "Cricket Bot is running smoothly with Full Details!", 200
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
@@ -205,12 +228,11 @@ def webhook_events():
                     
                     keywords = ["score", "live", "cricbuzz", "cricket", "ban", "afg", "bd", "sa", "aus", "ind", "eng", "pak", "nz", "vs"]
                     
-                    # Keywords er sathe isdigit() check add kora holo jate match_id likhleo kaj kore
                     if any(keyword in message_text.lower() for keyword in keywords) or message_text.isdigit():
                         live_score_reply = handle_cricket_query(message_text)
                         send_message(sender_id, live_score_reply)
                     else:
-                        send_message(sender_id, "Live score jante 'score' likhun othoba Match ID type korun.")
+                        send_message(sender_id, "Live score জানতে 'score' লিখুন অথবা Match ID দিন।")
                         
         return "EVENT_RECEIVED", 200
     return "Not Found", 404
