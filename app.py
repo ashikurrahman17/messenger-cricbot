@@ -200,6 +200,7 @@ def handle_cricket_query(user_msg):
     headers = {
         "x-rapidapi-key": RAPIDAPI_KEY,
         "x-rapidapi-host": "cricbuzz-cricket.p.rapidapi.com"
+        "Cache-Control": "no-cache"
     }
     
     all_matches = get_all_api_matches(headers)
