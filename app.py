@@ -152,7 +152,6 @@ def extract_full_scorecard(scard_data, base_status=""):
             out_desc = b.get("outdec", "")
             
             if out_desc and "Did not Bat" not in out_desc:
-                # No truncation, full dismissal description
                 reply += f"👉 {name}: {r} ({balls}) - {out_desc}\n"
                 
         reply += "\nBOWLERS:\n"
@@ -164,7 +163,6 @@ def extract_full_scorecard(scard_data, base_status=""):
             o = str(b.get("overs", "0"))
             
             if name:
-                # Removed economy rate as requested
                 reply += f"👉 {name}: {w}/{r} ({o} ov)\n"
         reply += f"\n{'-'*30}\n\n"
         
@@ -188,7 +186,6 @@ def get_all_api_matches(headers):
                             for m in wrapper_matches:
                                 if "matchInfo" in m:
                                     m_id = m["matchInfo"].get("matchId")
-                                    # Prevent duplicate matches from live and recent lists
                                     if not any(existing.get("matchInfo", {}).get("matchId") == m_id for existing in all_matches):
                                         all_matches.append(m)
         except Exception:
@@ -199,7 +196,7 @@ def handle_cricket_query(user_msg):
     msg_lower = user_msg.lower().strip()
     headers = {
         "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "cricbuzz-cricket.p.rapidapi.com"
+        "x-rapidapi-host": "cricbuzz-cricket.p.rapidapi.com",
         "Cache-Control": "no-cache"
     }
     
@@ -230,7 +227,7 @@ def handle_cricket_query(user_msg):
             reply += f"🔑 Details dekhte likhun: {match_id}\n\n"
             
             count += 1
-            if count >= 3: # Shudhu top 3 ta match show korbe list e
+            if count >= 3:
                 break
         return reply.strip()
 
@@ -256,7 +253,6 @@ def handle_cricket_query(user_msg):
             match_found = any(term in [t1_s, t2_s, t1_n, t2_n] for term in expanded_terms)
             if match_found:
                 target_match = m
-                # Jodi live match hoy tobe setakei priority dibe
                 if info.get("state") == "In Progress":
                     break
                     
@@ -268,7 +264,6 @@ def handle_cricket_query(user_msg):
     base_status = info.get("status", "")
     match_state = info.get("state", "")
     
-    # State check: Complete hole Full Scorecard anbe, naile Live Details
     if match_state in ["Complete", "Result"]:
         url_scard = f"https://cricbuzz-cricket.p.rapidapi.com/mcenter/v1/{target_match_id}/scard"
         score_resp = requests.get(url_scard, headers=headers, timeout=10)
@@ -303,7 +298,6 @@ def send_message(recipient_id, message_text):
     url = f"https://graph.facebook.com/v19.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     headers = {"Content-Type": "application/json"}
     
-    # Chunking jodi message 2000 character cross kore (Safety measure)
     if len(message_text) > 1900:
         parts = [message_text[i:i+1900] for i in range(0, len(message_text), 1900)]
         for part in parts:
@@ -337,8 +331,7 @@ def webhook_events():
             for messaging_event in entry.get("messaging", []):
                 if messaging_event.get("message") and messaging_event["message"].get("text"):
                     sender_id = messaging_event["sender"]["id"]
-                    # Ekhane ["text"] ta add kora hoyeche
-                    message_text = messaging_event["message"]["text"].strip() 
+                    message_text = messaging_event["message"]["text"].strip()
                     
                     keywords = ["score", "live", "cricbuzz", "cricket", "ban", "afg", "bd", "sa", "aus", "ind", "eng", "pak", "nz", "vs", "wi", "zim", "sl"]
                     
