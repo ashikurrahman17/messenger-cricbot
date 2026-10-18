@@ -336,7 +336,8 @@ def webhook_events():
             for messaging_event in entry.get("messaging", []):
                 if messaging_event.get("message") and messaging_event["message"].get("text"):
                     sender_id = messaging_event["sender"]["id"]
-                    message_text = messaging_event["message"].strip()
+                    # Ekhane ["text"] ta add kora hoyeche
+                    message_text = messaging_event["message"]["text"].strip() 
                     
                     keywords = ["score", "live", "cricbuzz", "cricket", "ban", "afg", "bd", "sa", "aus", "ind", "eng", "pak", "nz", "vs", "wi", "zim", "sl"]
                     
