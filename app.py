@@ -11,6 +11,15 @@ PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "84979f4188mshaf1d97ff6398457p1d4d3djsn974c4fcce480")  # Default API Key if not set in .env
 
+aliases = {
+    "bd": ["ban", "bangladesh"], "ban": ["bd", "bangladesh"], 
+    "ind": ["india"], "sa": ["rsa", "south africa"], 
+    "aus": ["australia"], "nz": ["new zealand"], 
+    "eng": ["england"], "pak": ["pakistan"], 
+    "sl": ["sri lanka", "srilanka"], "afg": ["afghanistan"], 
+    "wi": ["west indies"], "zim": ["zimbabwe"]
+}
+
 def get_score_str(match_score, team1_name, team2_name):
     if not match_score: 
         return ""
@@ -118,6 +127,74 @@ def extract_live_details(score_data, target_match_status="", main_score_str=""):
         
     return reply.strip()
 
+def extract_full_scorecard(scard_data, base_status=""):
+    scorecards = scard_data.get("scorecard") or []
+    if not scorecards:
+        return f"📌 {base_status}\n\n❌ Full scorecard not available yet."
+        
+    reply = f"📊 FULL MATCH SCORECARD\n📌 {base_status}\n{'='*30}\n\n"
+    
+    for inn in scorecards:
+        inn_name = inn.get("inningsname", inn.get("batteam", f"Innings {inn.get('inningsid')}"))
+        score = inn.get("score")
+        wkts = inn.get("wickets")
+        ovs = inn.get("overs")
+        score_str = f"{score}/{wkts} ({ovs} ov)" if score is not None else ""
+        
+        reply += f"🏏 {inn_name}  {score_str}\n\n"
+        
+        reply += "BATTERS:\n"
+        batsmen = inn.get("batsman") or []
+        for b in batsmen:
+            name = b.get("name", "")
+            r = str(b.get("runs", "0"))
+            balls = str(b.get("balls", "0"))
+            out_desc = b.get("outdec", "")
+            
+            if out_desc and "Did not Bat" not in out_desc:
+                # No truncation, full dismissal description
+                reply += f"👉 {name}: {r} ({balls}) - {out_desc}\n"
+                
+        reply += "\nBOWLERS:\n"
+        bowlers = inn.get("bowler") or []
+        for b in bowlers:
+            name = b.get("name", "")
+            w = str(b.get("wickets", "0"))
+            r = str(b.get("runs", "0"))
+            o = str(b.get("overs", "0"))
+            
+            if name:
+                # Removed economy rate as requested
+                reply += f"👉 {name}: {w}/{r} ({o} ov)\n"
+        reply += f"\n{'-'*30}\n\n"
+        
+    return reply.strip()
+
+def get_all_api_matches(headers):
+    all_matches = []
+    urls = [
+        "https://cricbuzz-cricket.p.rapidapi.com/matches/v1/live",
+        "https://cricbuzz-cricket.p.rapidapi.com/matches/v1/recent"
+    ]
+    for url in urls:
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                type_matches = resp.json().get("typeMatches") or []
+                for t in type_matches:
+                    if t.get("matchType") in ["International", "League", "Women", "Domestic"]:
+                        for series in t.get("seriesMatches") or []:
+                            wrapper_matches = series.get("seriesAdWrapper", {}).get("matches") or series.get("matches") or []
+                            for m in wrapper_matches:
+                                if "matchInfo" in m:
+                                    m_id = m["matchInfo"].get("matchId")
+                                    # Prevent duplicate matches from live and recent lists
+                                    if not any(existing.get("matchInfo", {}).get("matchId") == m_id for existing in all_matches):
+                                        all_matches.append(m)
+        except Exception:
+            pass
+    return all_matches
+
 def handle_cricket_query(user_msg):
     msg_lower = user_msg.lower().strip()
     headers = {
@@ -125,123 +202,119 @@ def handle_cricket_query(user_msg):
         "x-rapidapi-host": "cricbuzz-cricket.p.rapidapi.com"
     }
     
-    url_live_matches = "https://cricbuzz-cricket.p.rapidapi.com/matches/v1/live"
-    try:
-        response = requests.get(url_live_matches, headers=headers, timeout=10)
-        if response.status_code != 200:
-            return "এ মুহূর্তে স্কোর পাওয়া যাচ্ছে না।"
+    all_matches = get_all_api_matches(headers)
+    if not all_matches:
+        return "সার্ভারে সমস্যা বা এই মুহূর্তে কোনো ম্যাচ চলছে না।"
+
+    is_general_query = msg_lower in ["score", "live", "cricbuzz", "cricket"]
+    is_id_query = msg_lower.isdigit()
+    
+    if is_general_query:
+        reply = "🏆 Cricket Matches (Live & Recent):\n\n"
+        count = 0
+        for m in all_matches:
+            info = m.get("matchInfo") or {}
+            t1_n = info.get("team1", {}).get("teamName", "")
+            t2_n = info.get("team2", {}).get("teamName", "")
+            t1_s = info.get("team1", {}).get("teamSName", "")
+            t2_s = info.get("team2", {}).get("teamSName", "")
+            status = info.get("status", "")
+            match_id = info.get("matchId")
             
-        matches_list = response.json().get("typeMatches") or []
-        all_matches = []
+            reply += f"🔹 {t1_n} vs {t2_n}\n"
+            score_str = get_score_str(m.get("matchScore"), t1_s, t2_s)
+            if score_str:
+                reply += f"🏏 {score_str}\n"
+            reply += f"📌 {status}\n"
+            reply += f"🔑 Details dekhte likhun: {match_id}\n\n"
+            
+            count += 1
+            if count >= 3: # Shudhu top 3 ta match show korbe list e
+                break
+        return reply.strip()
+
+    target_match = None
+    if is_id_query:
+        for m in all_matches:
+            if str(m.get("matchInfo", {}).get("matchId")) == msg_lower:
+                target_match = m
+                break
+    else:
+        search_terms = msg_lower.replace("vs", " ").split()
+        expanded_terms = set(search_terms)
+        for term in search_terms:
+            if term in aliases: expanded_terms.update(aliases[term])
         
-        for t in matches_list:
-            if t.get("matchType") in ["International", "League", "Women", "Domestic"]:
-                for series in t.get("seriesMatches") or []:
-                    wrapper_matches = series.get("seriesAdWrapper", {}).get("matches") or series.get("matches") or []
-                    for m in wrapper_matches:
-                        if "matchInfo" in m:
-                            all_matches.append(m)
+        for m in all_matches:
+            info = m.get("matchInfo") or {}
+            t1_n = info.get("team1", {}).get("teamName", "").lower()
+            t2_n = info.get("team2", {}).get("teamName", "").lower()
+            t1_s = info.get("team1", {}).get("teamSName", "").lower()
+            t2_s = info.get("team2", {}).get("teamSName", "").lower()
+            
+            match_found = any(term in [t1_s, t2_s, t1_n, t2_n] for term in expanded_terms)
+            if match_found:
+                target_match = m
+                # Jodi live match hoy tobe setakei priority dibe
+                if info.get("state") == "In Progress":
+                    break
+                    
+    if not target_match:
+        return "আপনার কাঙ্ক্ষিত ম্যাচটি এখন চলছে না বা লিস্টে নেই।"
 
-        if not all_matches:
-            return "এই মুহূর্তে কোনো লাইভ ম্যাচ চলছে না।"
-
-        is_general_query = msg_lower in ["score", "live", "cricbuzz", "cricket"]
-        is_id_query = msg_lower.isdigit()
+    info = target_match.get("matchInfo") or {}
+    target_match_id = info.get("matchId")
+    base_status = info.get("status", "")
+    match_state = info.get("state", "")
+    
+    # State check: Complete hole Full Scorecard anbe, naile Live Details
+    if match_state in ["Complete", "Result"]:
+        url_scard = f"https://cricbuzz-cricket.p.rapidapi.com/mcenter/v1/{target_match_id}/scard"
+        score_resp = requests.get(url_scard, headers=headers, timeout=10)
         
-        if is_general_query:
-            reply = "🏆 Live Cricket Updates:\n\n"
-            count = 0
-            for m in all_matches:
-                info = m.get("matchInfo") or {}
-                t1_n = info.get("team1", {}).get("teamName", "")
-                t2_n = info.get("team2", {}).get("teamName", "")
-                t1_s = info.get("team1", {}).get("teamSName", "")
-                t2_s = info.get("team2", {}).get("teamSName", "")
-                status = info.get("status", "")
-                match_id = info.get("matchId")
-                
-                reply += f"🔹 {t1_n} vs {t2_n}\n"
-                score_str = get_score_str(m.get("matchScore"), t1_s, t2_s)
-                if score_str:
-                    reply += f"🏏 {score_str}\n"
-                reply += f"📌 {status}\n"
-                reply += f"🔑 Details dekhte likhun: {match_id}\n\n"
-                
-                count += 1
-                if count >= 3:
-                    break
-            return reply.strip()
-
-        target_match = None
-        if is_id_query:
-            for m in all_matches:
-                if str(m.get("matchInfo", {}).get("matchId")) == msg_lower:
-                    target_match = m
-                    break
+        if score_resp.status_code == 200:
+            return extract_full_scorecard(score_resp.json(), base_status)
         else:
-            aliases = {"bd": ["ban", "bangladesh"], "ban": ["bd", "bangladesh"], "ind": ["india"], "sa": ["rsa", "south africa"], "aus": ["australia"], "nz": ["new zealand"], "eng": ["england"], "pak": ["pakistan"], "sl": ["sri lanka", "srilanka"], "afg": ["afghanistan"], "wi": ["west indies"], "zim": ["zimbabwe"]}
-            search_terms = msg_lower.replace("vs", " ").split()
-            expanded_terms = set(search_terms)
-            for term in search_terms:
-                if term in aliases: expanded_terms.update(aliases[term])
+            return f"📌 {base_status}\n\n❌ Score details unavailable."
             
-            for m in all_matches:
-                info = m.get("matchInfo") or {}
-                t1_n = info.get("team1", {}).get("teamName", "").lower()
-                t2_n = info.get("team2", {}).get("teamName", "").lower()
-                t1_s = info.get("team1", {}).get("teamSName", "").lower()
-                t2_s = info.get("team2", {}).get("teamSName", "").lower()
-                
-                match_found = any(term in [t1_s, t2_s, t1_n, t2_n] for term in expanded_terms)
-                if match_found:
-                    target_match = m
-                    if info.get("state") == "In Progress":
-                        break
-                        
-        if not target_match:
-            return "আপনার কাঙ্ক্ষিত ম্যাচটি এখন চলছে না বা লিস্টে নেই।"
-
-        info = target_match.get("matchInfo") or {}
+    else:
         t1_name = info.get("team1", {}).get("teamName", "Team 1")
         t2_name = info.get("team2", {}).get("teamName", "Team 2")
         t1_sname = info.get("team1", {}).get("teamSName", "")
         t2_sname = info.get("team2", {}).get("teamSName", "")
-        target_match_id = info.get("matchId")
-        base_status = info.get("status", "")
         
         reply = f"🏆 {t1_name} vs {t2_name}\n"
         
         url_live_score = f"https://cricbuzz-cricket.p.rapidapi.com/mcenter/v1/{target_match_id}/livescore"
         score_resp = requests.get(url_live_score, headers=headers, timeout=10)
-        
         main_score_str = get_score_str(target_match.get("matchScore"), t1_sname, t2_sname)
 
         if score_resp.status_code == 200:
-            score_data = score_resp.json()
-            reply += extract_live_details(score_data, base_status, main_score_str)
+            reply += extract_live_details(score_resp.json(), base_status, main_score_str)
         else:
             reply += f"📌 {base_status}\n\n"
             if main_score_str:
                 reply += f"📊 Score:\n{main_score_str}"
                 
         return reply.strip()
-        
-    except Exception as e:
-        print(f"API Error: {e}")
-        return "সার্ভারে সমস্যা, একটু পর চেষ্টা করুন।"
 
 def send_message(recipient_id, message_text):
     url = f"https://graph.facebook.com/v19.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     headers = {"Content-Type": "application/json"}
-    payload = {
-        "recipient": {"id": recipient_id},
-        "message": {"text": message_text}
-    }
-    requests.post(url, headers=headers, json=payload)
+    
+    # Chunking jodi message 2000 character cross kore (Safety measure)
+    if len(message_text) > 1900:
+        parts = [message_text[i:i+1900] for i in range(0, len(message_text), 1900)]
+        for part in parts:
+            payload = {"recipient": {"id": recipient_id}, "message": {"text": part}}
+            requests.post(url, headers=headers, json=payload)
+    else:
+        payload = {"recipient": {"id": recipient_id}, "message": {"text": message_text}}
+        requests.post(url, headers=headers, json=payload)
 
 @app.route("/", methods=["GET"])
 def index():
-    return "Cricket Bot is running smoothly with Professional Details!", 200
+    return "Cricket Bot is running smoothly with Live & Completed Match Logic!", 200
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
@@ -263,15 +336,15 @@ def webhook_events():
             for messaging_event in entry.get("messaging", []):
                 if messaging_event.get("message") and messaging_event["message"].get("text"):
                     sender_id = messaging_event["sender"]["id"]
-                    message_text = messaging_event["message"]["text"].strip()
+                    message_text = messaging_event["message"].strip()
                     
-                    keywords = ["score", "live", "cricbuzz", "cricket", "ban", "afg", "bd", "sa", "aus", "ind", "eng", "pak", "nz", "vs"]
+                    keywords = ["score", "live", "cricbuzz", "cricket", "ban", "afg", "bd", "sa", "aus", "ind", "eng", "pak", "nz", "vs", "wi", "zim", "sl"]
                     
                     if any(keyword in message_text.lower() for keyword in keywords) or message_text.isdigit():
                         live_score_reply = handle_cricket_query(message_text)
                         send_message(sender_id, live_score_reply)
                     else:
-                        send_message(sender_id, "Live score জানতে 'score' লিখুন অথবা Match ID দিন।")
+                        send_message(sender_id, "Live score বা Match details জানতে 'score' লিখুন অথবা Match ID দিন।")
                         
         return "EVENT_RECEIVED", 200
     return "Not Found", 404
