@@ -9,7 +9,7 @@ app = Flask(__name__)
 
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "84979f4188mshaf1d97ff6398457p1d4d3djsn974c4fcce480")  # Default API Key if not set in .env
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "0435491e0emshf98c30b0b288a90p151f59jsn176e7964c638")  # Default API Key if not set in .env
 
 aliases = {
     "bd": ["ban", "bangladesh"], "ban": ["bd", "bangladesh"], 
